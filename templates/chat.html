@@ -1,0 +1,361 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AI Chat Platform</title>
+    <link href="https://cdn.jsdelivr.net/npm/tailwindcss@2.2.19/dist/tailwind.min.css" rel="stylesheet">
+</head>
+<body class="bg-gray-100">
+    <div class="container mx-auto px-4 py-8">
+        <!-- Header -->
+        <div class="flex justify-between items-center mb-8">
+            <h1 class="text-2xl font-bold">AI Chat Platform</h1>
+            <div class="flex items-center space-x-4">
+                <span id="username-display" class="font-medium"></span>
+                <button onclick="logout()" class="text-red-600 hover:text-red-800">Logout</button>
+            </div>
+        </div>
+
+        <div class="grid grid-cols-12 gap-4">
+            <!-- User Profile -->
+            <div class="col-span-3 space-y-4">
+                <div class="bg-white rounded-lg shadow p-4">
+                    <h2 class="text-xl font-bold mb-4">Profile</h2>
+                    <div id="user-characteristics" class="space-y-2">
+                        <!-- Characteristics will be loaded here -->
+                    </div>
+                </div>
+                
+                <div class="bg-white rounded-lg shadow p-4">
+                    <h2 class="text-xl font-bold mb-4">Suggested Users</h2>
+                    <div id="user-suggestions" class="space-y-2">
+                        <!-- Suggestions will be loaded here -->
+                    </div>
+                </div>
+            </div>
+
+            <!-- Chat Area -->
+            <div class="col-span-6 space-y-4">
+                <div class="bg-white rounded-lg shadow p-4">
+                    <div id="active-chat-header" class="pb-4 border-b hidden">
+                        <h3 class="text-lg font-medium"></h3>
+                    </div>
+                    <div class="h-[500px] flex flex-col">
+                        <div id="chat-messages" class="flex-1 overflow-y-auto space-y-4 py-4">
+                            <!-- Messages will be loaded here -->
+                        </div>
+                        <div class="mt-4">
+                            <form id="chat-form" class="flex space-x-2">
+                                <input type="text" id="message-input" class="flex-1 rounded-lg border border-gray-300 px-4 py-2" 
+                                    placeholder="Chat with Claude or select a user to message...">
+                                <button type="submit" class="bg-blue-500 text-white px-4 py-2 rounded-lg">Send</button>
+                            </form>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="bg-white rounded-lg shadow p-4">
+                    <h2 class="text-xl font-bold mb-4">Conversations</h2>
+                    <div id="conversations-list" class="space-y-2">
+                        <!-- Conversations will be loaded here -->
+                    </div>
+                </div>
+            </div>
+
+            <!-- User Search -->
+            <div class="col-span-3 bg-white rounded-lg shadow p-4">
+                <h2 class="text-xl font-bold mb-4">Find Users</h2>
+                <form id="search-form" class="space-y-4">
+                    <input type="text" id="search-input" class="w-full rounded-lg border border-gray-300 px-4 py-2" 
+                        placeholder="Describe who you're looking for...">
+                    <button type="submit" class="w-full bg-green-500 text-white px-4 py-2 rounded-lg">Search</button>
+                </form>
+                <div id="search-results" class="mt-4 space-y-2">
+                    <!-- Search results will be loaded here -->
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        let currentUser = null;
+        let activeChat = {
+            userId: null,
+            username: null,
+            isClaudeChat: true
+        };
+
+        // Check authentication
+        async function checkAuth() {
+            const token = localStorage.getItem('token');
+            if (!token) {
+                window.location.href = '/login';
+                return;
+            }
+
+            try {
+                const response = await fetch('/api/profile', {
+                    headers: {
+                        'Authorization': `Bearer ${token}`
+                    }
+                });
+
+                if (!response.ok) {
+                    throw new Error('Authentication failed');
+                }
+
+                currentUser = await response.json();
+                document.getElementById('username-display').textContent = currentUser.username;
+                
+                // Load initial data
+                loadUserCharacteristics();
+                loadConversations();
+                loadSuggestions();
+            } catch (error) {
+                console.error('Auth error:', error);
+                window.location.href = '/login';
+            }
+        }
+
+        // Chat functionality
+        const chatForm = document.getElementById('chat-form');
+        const messageInput = document.getElementById('message-input');
+        const chatMessages = document.getElementById('chat-messages');
+
+        chatForm.addEventListener('submit', async (e) => {
+            e.preventDefault();
+            const message = messageInput.value;
+            if (!message) return;
+
+            try {
+                if (activeChat.isClaudeChat) {
+                    const response = await fetchWithAuth('/api/chat', {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json',
+                        },
+                        body: JSON.stringify({ message })
+                    });
+
+                    const data = await response.json();
+                    appendMessage('You', message);
+                    appendMessage('Claude', data.response);
+                    
+                    // Update characteristics
+                    loadUserCharacteristics();
+                } else {
+                    const response = await fetchWithAuth('/api/send-message', {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json',
+                        },
+                        body: JSON.stringify({
+                            recipient_id: activeChat.userId,
+                            content: message
+                        })
+                    });
+
+                    const data = await response.json();
+                    appendMessage('You', message);
+                    loadConversations();
+                }
+
+                messageInput.value = '';
+            } catch (error) {
+                console.error('Error:', error);
+            }
+        });
+
+        // User search functionality
+        const searchForm = document.getElementById('search-form');
+        const searchInput = document.getElementById('search-input');
+        const searchResults = document.getElementById('search-results');
+
+        searchForm.addEventListener('submit', async (e) => {
+            e.preventDefault();
+            const query = searchInput.value;
+            if (!query) return;
+
+            try {
+                const response = await fetchWithAuth('/api/search-users', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({ query })
+                });
+
+                const data = await response.json();
+                displaySearchResults(data.users);
+            } catch (error) {
+                console.error('Error:', error);
+            }
+        });
+
+        // Helper functions
+        async function fetchWithAuth(url, options = {}) {
+            const token = localStorage.getItem('token');
+            return fetch(url, {
+                ...options,
+                headers: {
+                    ...options.headers,
+                    'Authorization': `Bearer ${token}`
+                }
+            });
+        }
+
+        function appendMessage(sender, content) {
+            const messageDiv = document.createElement('div');
+            messageDiv.className = 'p-3 rounded-lg ' + (sender === 'You' ? 'bg-blue-100 ml-auto' : 'bg-gray-100');
+            messageDiv.innerHTML = `
+                <p class="font-bold">${sender}</p>
+                <p>${content}</p>
+            `;
+            chatMessages.appendChild(messageDiv);
+            chatMessages.scrollTop = chatMessages.scrollHeight;
+        }
+
+        function displaySearchResults(users) {
+            searchResults.innerHTML = '';
+            users.forEach(user => {
+                const userDiv = document.createElement('div');
+                userDiv.className = 'p-2 border rounded hover:bg-gray-100 cursor-pointer';
+                userDiv.innerHTML = `
+                    <div class="font-medium">${user.username}</div>
+                    <div class="text-sm text-gray-600">
+                        ${Object.entries(user.characteristics)
+                            .map(([key, value]) => `${key}: ${value}`)
+                            .join(', ')}
+                    </div>
+                `;
+                userDiv.onclick = () => initiateChat(user.id, user.username);
+                searchResults.appendChild(userDiv);
+            });
+        }
+
+        async function loadUserCharacteristics() {
+            try {
+                const response = await fetchWithAuth('/api/profile');
+                const data = await response.json();
+                const characteristicsDiv = document.getElementById('user-characteristics');
+                characteristicsDiv.innerHTML = '';
+                
+                Object.entries(data.characteristics).forEach(([key, value]) => {
+                    const charDiv = document.createElement('div');
+                    charDiv.className = 'p-2 bg-gray-50 rounded';
+                    charDiv.textContent = `${key}: ${value}`;
+                    characteristicsDiv.appendChild(charDiv);
+                });
+            } catch (error) {
+                console.error('Error:', error);
+            }
+        }
+
+        async function loadConversations() {
+            try {
+                const response = await fetchWithAuth('/api/conversations');
+                const data = await response.json();
+                const conversationsDiv = document.getElementById('conversations-list');
+                conversationsDiv.innerHTML = '';
+                
+                data.conversations.forEach(conv => {
+                    const convDiv = document.createElement('div');
+                    convDiv.className = 'p-2 border rounded hover:bg-gray-100 cursor-pointer';
+                    convDiv.innerHTML = `
+                        <div class="font-medium">${conv.user.username}</div>
+                        <div class="text-sm text-gray-600">${conv.last_message.content}</div>
+                        ${conv.unread_count > 0 ? 
+                            `<div class="text-xs text-white bg-blue-500 rounded-full px-2 py-0.5 inline-block">${conv.unread_count}</div>` : 
+                            ''}
+                    `;
+                    convDiv.onclick = () => initiateChat(conv.user.id, conv.user.username);
+                    conversationsDiv.appendChild(convDiv);
+                });
+            } catch (error) {
+                console.error('Error:', error);
+            }
+        }
+
+        async function loadSuggestions() {
+            try {
+                const response = await fetchWithAuth('/api/suggestions');
+                const data = await response.json();
+                const suggestionsDiv = document.getElementById('user-suggestions');
+                suggestionsDiv.innerHTML = '';
+                
+                data.suggestions.forEach(user => {
+                    const userDiv = document.createElement('div');
+                    userDiv.className = 'p-2 border rounded hover:bg-gray-100 cursor-pointer';
+                    userDiv.innerHTML = `
+                        <div class="font-medium">${user.username}</div>
+                        <div class="text-sm text-gray-600">
+                            ${Object.entries(user.characteristics)
+                                .map(([key, value]) => `${key}: ${value}`)
+                                .join(', ')}
+                        </div>
+                    `;
+                    userDiv.onclick = () => initiateChat(user.id, user.username);
+                    suggestionsDiv.appendChild(userDiv);
+                });
+            } catch (error) {
+                console.error('Error:', error);
+            }
+        }
+
+        async function initiateChat(userId, username) {
+            activeChat = {
+                userId,
+                username,
+                isClaudeChat: false
+            };
+
+            // Update UI
+            const header = document.getElementById('active-chat-header');
+            header.classList.remove('hidden');
+            header.querySelector('h3').textContent = `Chat with ${username}`;
+            messageInput.placeholder = `Message ${username}...`;
+            chatMessages.innerHTML = '';
+
+            // Load chat history
+            try {
+                const response = await fetchWithAuth(`/api/messages/${userId}`);
+                const data = await response.json();
+                
+                data.messages.reverse().forEach(msg => {
+                    appendMessage(
+                        msg.sender_id === currentUser.id ? 'You' : username,
+                        msg.content
+                    );
+                });
+            } catch (error) {
+                console.error('Error:', error);
+            }
+        }
+
+        function switchToClaudeChat() {
+            activeChat = {
+                userId: null,
+                username: null,
+                isClaudeChat: true
+            };
+
+            const header = document.getElementById('active-chat-header');
+            header.classList.add('hidden');
+            messageInput.placeholder = 'Chat with Claude...';
+            chatMessages.innerHTML = '';
+        }
+
+        function logout() {
+            localStorage.removeItem('token');
+            window.location.href = '/login';
+        }
+
+        // Initialize
+        checkAuth();
+
+        // Poll for new messages every 5 seconds
+        setInterval(loadConversations, 5000);
+    </script>
+</body>
+</html>
